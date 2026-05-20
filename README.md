@@ -161,6 +161,8 @@ freecs.Iter2[Position, Velocity](world, 0, 0, func(_ freecs.Entity, position *Po
 // component arities; the pattern is mechanical.
 ```
 
+`Iter*` materializes a `[]T` view per archetype via `unsafe.Slice` and indexes through that; per-element access is equivalent to a plain `for i := range slice`.
+
 `Archetype.Mask` and `Archetype.Entities` are exported so a `ForEach`
 callback can read them directly. They are read-only; structural changes
 must go through the `*World` methods.
@@ -266,12 +268,6 @@ for {
 }
 ```
 
-## Why generics instead of codegen
-
-In Rust, `freecs::ecs!` is a declarative macro that takes one component declaration and fans out the per-component struct fields, accessors, mask constants, and event/tag plumbing. In Go, generics fill the same role: every typed operation is parameterized over the component type, and the underlying column storage is a `reflect.MakeSlice` allocation backed by a cached `unsafe.Pointer` for indexing. The hot path materializes a `[]T` view via `unsafe.Slice` once per archetype per query and iterates that, so per-element access compiles to the same memory operations as hand-written `for i := range positions`.
-
-The thing the Go version cannot offer that codegen would is named accessors like `world.GetPosition(entity)`. If that matters for your project, you can run a small `go generate` wrapper that emits typed forwarders on top of this library; the engine underneath does not need to change.
-
 ## Multi-world
 
 When 64 components per world is not enough, split components across several
@@ -349,21 +345,9 @@ component you want change-detected, or use the single-entity `GetMut` and
 - `examples/simple`, a minimal CLI demo of every API (no graphics)
 - `examples/breakout`, a Breakout game using freecs-go + [cogentcore/webgpu](https://github.com/cogentcore/webgpu) + GLFW. Builds for desktop and WebAssembly. The wasm bundle is auto-deployed to GitHub Pages on every push to `main`.
 
-## Just recipes
+## Tasks
 
-Tasks are driven through a `justfile` (run `just --list`):
-
-| Task                | What it does                                    |
-|---------------------|-------------------------------------------------|
-| `just test`         | `go test ./...` against the library             |
-| `just check`        | `go vet` + `gofmt -l` (fails on unformatted)    |
-| `just format`       | `gofmt -w .`                                    |
-| `just ci`           | check + test                                    |
-| `just run`          | Run breakout natively                           |
-| `just build`        | Build the breakout binary                       |
-| `just build-wasm`   | Build the breakout wasm bundle into `examples/breakout/docs/` |
-| `just serve`        | Serve `examples/breakout/docs/` on `:8080`      |
-| `just run-wasm`     | build-wasm + serve                              |
+Common tasks live in the `justfile`. Run `just --list` to see them.
 
 ## License
 
