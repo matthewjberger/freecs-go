@@ -1,7 +1,7 @@
 package freecs
 
-// SystemFn is the signature every system implements. A system reads or writes
-// the world to advance one piece of game state.
+// SystemFn is the signature every system implements. A system reads or
+// writes the world to advance one piece of game state.
 type SystemFn func(world *World)
 
 // Schedule is an ordered list of named systems. Run executes them in order
@@ -18,43 +18,39 @@ func NewSchedule() *Schedule { return &Schedule{} }
 
 // Push appends system at the end of the schedule under name. Panics if name
 // is already in use.
-func (s *Schedule) Push(name string, system SystemFn) *Schedule {
+func (s *Schedule) Push(name string, system SystemFn) {
 	if s.indexOf(name) >= 0 {
 		panic("freecs: schedule already contains system " + name)
 	}
 	s.names = append(s.names, name)
 	s.systems = append(s.systems, system)
-	return s
 }
 
-// InsertBefore places system at the position of target. Panics if target is
-// not in the schedule or name is a duplicate.
-func (s *Schedule) InsertBefore(target, name string, system SystemFn) *Schedule {
+// InsertBefore places system at the position of target. Panics if target
+// is not in the schedule or name is a duplicate.
+func (s *Schedule) InsertBefore(target, name string, system SystemFn) {
 	pos := s.requireIndex(target)
 	if s.indexOf(name) >= 0 {
 		panic("freecs: schedule already contains system " + name)
 	}
 	s.names = append(s.names[:pos], append([]string{name}, s.names[pos:]...)...)
 	s.systems = append(s.systems[:pos], append([]SystemFn{system}, s.systems[pos:]...)...)
-	return s
 }
 
 // InsertAfter places system one slot past target.
-func (s *Schedule) InsertAfter(target, name string, system SystemFn) *Schedule {
+func (s *Schedule) InsertAfter(target, name string, system SystemFn) {
 	pos := s.requireIndex(target) + 1
 	if s.indexOf(name) >= 0 {
 		panic("freecs: schedule already contains system " + name)
 	}
 	s.names = append(s.names[:pos], append([]string{name}, s.names[pos:]...)...)
 	s.systems = append(s.systems[:pos], append([]SystemFn{system}, s.systems[pos:]...)...)
-	return s
 }
 
 // Replace swaps the implementation of an existing system, preserving order.
-func (s *Schedule) Replace(name string, system SystemFn) *Schedule {
+func (s *Schedule) Replace(name string, system SystemFn) {
 	pos := s.requireIndex(name)
 	s.systems[pos] = system
-	return s
 }
 
 // Remove drops the system with name. Returns true if it was present.

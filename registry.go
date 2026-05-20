@@ -77,7 +77,20 @@ func MaskOf[T any](world *World) Mask {
 	return info.mask
 }
 
-func componentInfoFor[T any](world *World) *componentInfo {
+// componentInfoFor returns the registered info for T, or (nil, false) when
+// T was never registered on this world. Used by read-only accessors that
+// should answer "this world does not have T" rather than panic, which
+// matters in multi-world setups where a component lives on one child world
+// and a query against a sibling world should return false.
+func componentInfoFor[T any](world *World) (*componentInfo, bool) {
+	elemType := reflect.TypeOf((*T)(nil)).Elem()
+	return world.registry.infoForType(elemType)
+}
+
+// mustComponentInfo is the panicking variant used by write paths where
+// targeting a world that does not own the column is a programming error
+// worth surfacing loudly.
+func mustComponentInfo[T any](world *World) *componentInfo {
 	elemType := reflect.TypeOf((*T)(nil)).Elem()
 	info, ok := world.registry.infoForType(elemType)
 	if !ok {

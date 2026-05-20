@@ -8,9 +8,16 @@ import "reflect"
 // GameTime float32`. Define your own named types and use them as the type
 // parameter.
 
-// SetResource installs (or replaces) the resource of type T.
+// SetResource installs the resource of type T, or writes through the
+// existing storage if T is already set. Pointers previously returned by
+// Resource[T] therefore remain valid across re-sets; the pointed-at value
+// is updated in place.
 func SetResource[T any](world *World, value T) {
 	key := reflect.TypeOf((*T)(nil)).Elem()
+	if existing, ok := world.resources[key]; ok {
+		*(existing.(*T)) = value
+		return
+	}
 	world.resources[key] = &value
 }
 

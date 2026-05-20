@@ -1,0 +1,103 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  vet:
+    name: Vet
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+      - run: go vet ./...
+
+  fmt:
+    name: Fmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+      - name: Check formatting
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            printf 'Unformatted Go files:\n%s\n' "$unformatted"
+            exit 1
+          fi
+
+  lint:
+    name: Lint (staticcheck)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+      - uses: dominikh/staticcheck-action@v1
+        with:
+          install-go: false
+
+  test:
+    name: Test (race)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+      - run: go test -race -count=1 ./...
+
+  tidy:
+    name: Tidy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+      - name: Library
+        run: go mod tidy -diff
+      - name: Breakout example
+        working-directory: examples/breakout
+        run: go mod tidy -diff
+
+  build-wasm:
+    name: Build breakout wasm
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+      - name: Build wasm bundle
+        working-directory: examples/breakout
+        env:
+          GOOS: js
+          GOARCH: wasm
+        run: go build -o docs/main.wasm .
+
+  build-desktop:
+    name: Build breakout desktop
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+      - name: Install GLFW system deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgl1-mesa-dev xorg-dev libxkbcommon-dev
+      - name: Build desktop binary
+        working-directory: examples/breakout
+        run: go build .
+      - name: Vet breakout
+        working-directory: examples/breakout
+        run: go vet ./...

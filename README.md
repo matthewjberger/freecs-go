@@ -2,6 +2,8 @@
 
 An archetype-based Entity Component System for Go, port of [freecs](https://github.com/matthewjberger/freecs).
 
+> Live demo: [Breakout in the browser](https://matthewjberger.github.io/freecs-go/), built from `examples/breakout`. Requires a [WebGPU-capable browser](https://caniuse.com/webgpu).
+
 The internal strategies are identical to the Rust version. Where Rust uses a declarative macro to fan out per-component code, the Go version uses generics over a small unsafe-pointer column core, so components are normal Go types and the typed API is `freecs.Get[Position](world, entity)` rather than `world.get_position(entity)`. No build step, no codegen, no reflection on the hot path.
 
 ## What carries over from freecs
@@ -10,7 +12,7 @@ The internal strategies are identical to the Rust version. Where Rust uses a dec
 - Generational `Entity` handles, stale handles fail closed
 - Archetype graph cache for O(1) single-bit add/remove migrations
 - Memoized query cache invalidated incrementally on new-archetype creation
-- Watermark-based change detection (`Mut` stamps, `IterChanged*` reads since the previous frame)
+- Watermark-based change detection (`GetMut` stamps, `IterChanged*` reads since the previous frame)
 - Double-buffered events, kept readable for two frames
 - Sparse-set tags that flip without an archetype migration
 - Command buffer for deferred structural changes during iteration
@@ -56,7 +58,7 @@ func main() {
 
     freecs.SetResource(world, DeltaTime(0.016))
 
-    player := freecs.Spawn(world, POSITION|VELOCITY)
+    player := world.Spawn(POSITION | VELOCITY)
     freecs.Set(world, player, Position{X: 0, Y: 0})
     freecs.Set(world, player, Velocity{X: 5, Y: 0})
     freecs.AddTag[Player](world, player)
@@ -69,10 +71,11 @@ func main() {
         })
     }
 
-    schedule := freecs.NewSchedule().Push("physics", physics)
+    schedule := freecs.NewSchedule()
+    schedule.Push("physics", physics)
     for frame := 0; frame < 60; frame++ {
         schedule.Run(world)
-        freecs.ApplyCommands(world)
+        world.ApplyCommands()
         world.Step()
     }
 
@@ -82,6 +85,13 @@ func main() {
 ```
 
 ## API surface
+
+The convention is the one Go's standard library uses: non-generic
+operations on `*World` are methods (`world.Spawn(...)`,
+`world.ApplyCommands()`), and operations parameterized over a component
+type are top-level generic functions (`freecs.Get[Position](world, e)`,
+`freecs.AddTag[Player](world, e)`). Go forbids type parameters on methods,
+so the split is forced.
 
 ### Registration and masks
 
@@ -100,11 +110,11 @@ mask := POSITION | VELOCITY
 ### Spawning
 
 ```go
-entity := freecs.Spawn(world, POSITION|VELOCITY)
+entity := world.Spawn(POSITION | VELOCITY)
 
 // Batch spawn with an initializer that gets direct table access:
-entities := freecs.SpawnBatch(world, POSITION|VELOCITY, 1000, func(table *freecs.Archetype, index int) {
-    column := freecs.Column[Position](world, table)
+entities := world.SpawnBatch(POSITION|VELOCITY, 1000, func(table *freecs.Archetype, index int) {
+    column, _ := freecs.Column[Position](world, table)
     column[index] = Position{X: float32(index)}
 })
 ```
@@ -113,32 +123,32 @@ entities := freecs.SpawnBatch(world, POSITION|VELOCITY, 1000, func(table *freecs
 
 ```go
 position, ok := freecs.Get[Position](world, entity)        // *Position, ok
-position, ok := freecs.Mut[Position](world, entity)        // *Position, ok; stamps tick
+position, ok := freecs.GetMut[Position](world, entity)     // *Position, ok; stamps tick
 
 freecs.Set(world, entity, Position{X: 1, Y: 2})            // adds if missing
 freecs.Add[Velocity](world, entity)                         // zero value
 freecs.Remove[Velocity](world, entity)
 freecs.Has[Position](world, entity)
-freecs.HasComponents(world, entity, POSITION|VELOCITY)
-freecs.ComponentMask(world, entity)
-freecs.AddComponents(world, entity, HEALTH|VELOCITY)        // multi-bit migration
-freecs.RemoveComponents(world, entity, VELOCITY)
-freecs.Despawn(world, entity)
+world.HasComponents(entity, POSITION|VELOCITY)
+world.ComponentMask(entity)
+world.AddComponents(entity, HEALTH|VELOCITY)               // multi-bit migration
+world.RemoveComponents(entity, VELOCITY)
+world.Despawn(entity)
 ```
 
 ### Queries and iteration
 
 ```go
 // Entity-yielding iteration:
-for entity := range freecs.Query(world, POSITION|VELOCITY, 0) {
+for entity := range world.Query(POSITION|VELOCITY, 0) {
     // ...
 }
-freecs.QueryFirst(world, POSITION|VELOCITY, 0)
-freecs.CountQuery(world, POSITION|VELOCITY, 0)
+world.QueryFirst(POSITION|VELOCITY, 0)
+world.CountQuery(POSITION|VELOCITY, 0)
 
 // Direct table access (no tick stamping):
-freecs.ForEach(world, POSITION|VELOCITY, 0, func(entity freecs.Entity, table *freecs.Archetype, index int) {
-    positions := freecs.Column[Position](world, table)
+world.ForEach(POSITION|VELOCITY, 0, func(entity freecs.Entity, table *freecs.Archetype, index int) {
+    positions, _ := freecs.Column[Position](world, table)
     positions[index].X += 1
 })
 
@@ -151,9 +161,13 @@ freecs.Iter2[Position, Velocity](world, 0, 0, func(_ freecs.Entity, position *Po
 // component arities; the pattern is mechanical.
 ```
 
+`Archetype.Mask` and `Archetype.Entities` are exported so a `ForEach`
+callback can read them directly. They are read-only; structural changes
+must go through the `*World` methods.
+
 ### Change detection
 
-`Mut` and `Set` both stamp the slot with the current tick. The bulk `Iter*` family does not — call `freecs.MarkChanged[T](world, entity)` inside the body if you mutated a component you want change-detected.
+`GetMut` and `Set` both stamp the slot with the current tick. The bulk `Iter*` family does not. Call `freecs.MarkChanged[T](world, entity)` inside the body if you mutated a component you want change-detected.
 
 ```go
 freecs.IterChanged1[Position](world, 0, 0, func(entity freecs.Entity, position *Position) {
@@ -205,13 +219,16 @@ Tag membership is a hash set keyed by entity, so adding or removing a tag does n
 ```go
 freecs.Iter1[Health](world, 0, 0, func(entity freecs.Entity, health *Health) {
     if health.Value <= 0 {
-        freecs.QueueDespawn(world, entity)
+        world.QueueDespawn(entity)
     }
 })
-freecs.ApplyCommands(world)
+world.ApplyCommands()
 ```
 
-Available: `Queue` (raw closure), `QueueSpawn`, `QueueDespawn`, `QueueAddComponents`, `QueueRemoveComponents`, `QueueSet[T]`, `QueueAdd[T]`, `QueueRemove[T]`, `QueueAddTag[T]`, `QueueRemoveTag[T]`.
+Methods on `*World`: `Queue`, `QueueSpawn`, `QueueDespawn`,
+`QueueAddComponents`, `QueueRemoveComponents`, `ApplyCommands`,
+`CommandCount`, `ClearCommands`. Top-level generic helpers: `QueueSet[T]`,
+`QueueAdd[T]`, `QueueRemove[T]`, `QueueAddTag[T]`, `QueueRemoveTag[T]`.
 
 ### Resources
 
@@ -233,10 +250,10 @@ Resources are keyed by Go type, so define named types (`type DeltaTime float32`)
 ### Schedule
 
 ```go
-schedule := freecs.NewSchedule().
-    Push("input", inputSystem).
-    Push("physics", physicsSystem).
-    Push("collision", collisionSystem)
+schedule := freecs.NewSchedule()
+schedule.Push("input", inputSystem)
+schedule.Push("physics", physicsSystem)
+schedule.Push("collision", collisionSystem)
 
 schedule.InsertBefore("physics", "ai", aiSystem)
 schedule.Replace("physics", physicsV2)
@@ -244,7 +261,7 @@ schedule.Remove("ai")
 
 for {
     schedule.Run(world)
-    freecs.ApplyCommands(world)
+    world.ApplyCommands()
     world.Step()
 }
 ```
@@ -255,12 +272,104 @@ In Rust, `freecs::ecs!` is a declarative macro that takes one component declarat
 
 The thing the Go version cannot offer that codegen would is named accessors like `world.GetPosition(entity)`. If that matters for your project, you can run a small `go generate` wrapper that emits typed forwarders on top of this library; the engine underneath does not need to change.
 
-## Limitations relative to freecs (Rust)
+## Multi-world
 
-- 64 component types per world. Multi-world support is not implemented yet; create separate `*World` values and share a mutable allocator manually if you need more.
-- No parallel iteration helper. `Iter*` is single-threaded. Rust freecs uses Rayon; Go's equivalent (`golang.org/x/sync/errgroup` or hand-rolled goroutines) is straightforward to layer on top of `ForEach` per-archetype if you want it.
-- The bulk `Iter*` family does not stamp change-detection ticks; call `MarkChanged[T]` explicitly. The single-entity `Mut` and `Set` do stamp automatically.
+When 64 components per world is not enough, split components across several
+worlds that share one entity allocator. Each `*World` still gets its own
+full bitmask space (start from bit 0 again) and per-world component access
+is unchanged. Only entity lifetime moves up to the `MultiWorld`.
+
+```go
+multi := freecs.NewMultiWorld()
+core := multi.NewWorld()
+render := multi.NewWorld()
+
+POSITION := freecs.Register[Position](core)
+SPRITE   := freecs.Register[Sprite](render)
+
+entity := multi.Spawn()                    // shared allocator, no placement
+core.SpawnEntityInto(entity, POSITION)
+render.SpawnEntityInto(entity, SPRITE)
+
+freecs.Set(core, entity, Position{X: 1})
+freecs.Set(render, entity, Sprite{ID: 7})
+
+multi.Despawn(entity)                       // cascades across every world
+multi.Step()                                // calls Step on every world
+```
+
+`Get[T]`, `Has[T]`, `GetMut[T]`, `Changed[T]` return `false` (rather than
+panic) when `T` is not registered on the world you ask, so a query for a
+component that lives on a sibling world is a soft miss. `Set[T]`,
+`Add[T]`, `Remove[T]` still panic on an unregistered type because writing
+to a world that does not own the column is a programming error.
+
+`MultiWorld` does not own tags, events, resources, or the command buffer;
+those stay per-`*World`. If you want a single place to keep them, pin them
+on a "primary" child world.
+
+## Parallel iteration
+
+`ParallelIter1` through `ParallelIter4` fan out one goroutine per matching
+archetype and wait for all to finish. The hot path inside each goroutine is
+identical to the serial `Iter*` family (`unsafe.Slice` materialization,
+typed pointer per component, no reflection).
+
+```go
+freecs.ParallelIter2[Position, Velocity](world, 0, 0, func(_ freecs.Entity, position *Position, velocity *Velocity) {
+    position.X += velocity.X * delta
+    position.Y += velocity.Y * delta
+})
+```
+
+Constraints:
+
+- The callback **must not** mutate world topology (no `Spawn`, `Despawn`,
+  `Add*`, `Remove*`, `Set` on a missing component, or tag inserts). Each
+  archetype is owned by exactly one goroutine; structural mutations would
+  touch shared `tableEdges`, `queryCache`, or tag sets. Use the command
+  buffer (`QueueDespawn`, `QueueSet`, ...) for deferred topology changes.
+- One `ParallelIter*` call at a time per world. The query cache is
+  populated single-writer on miss; concurrent `ParallelIter*` calls from
+  separate goroutines against the same world will race. Sequential calls
+  are fine, and the parallelism within a single call is what does the work.
+- The fan-out is per archetype, not per row. Workloads dominated by one
+  large archetype don't benefit; split rows manually with goroutines and
+  `freecs.Column[T]` if needed.
+
+## Other notes
+
+The bulk `Iter*` and `ParallelIter*` families do not stamp the change-
+detection tick. Call `MarkChanged[T]` inside the body when you mutated a
+component you want change-detected, or use the single-entity `GetMut` and
+`Set` which stamp automatically.
+
+## Examples
+
+- `examples/simple`, a minimal CLI demo of every API (no graphics)
+- `examples/breakout`, a Breakout game using freecs-go + [cogentcore/webgpu](https://github.com/cogentcore/webgpu) + GLFW. Builds for desktop and WebAssembly. The wasm bundle is auto-deployed to GitHub Pages on every push to `main`.
+
+## Just recipes
+
+Tasks are driven through a `justfile` (run `just --list`):
+
+| Task                | What it does                                    |
+|---------------------|-------------------------------------------------|
+| `just test`         | `go test ./...` against the library             |
+| `just check`        | `go vet` + `gofmt -l` (fails on unformatted)    |
+| `just format`       | `gofmt -w .`                                    |
+| `just ci`           | check + test                                    |
+| `just run`          | Run breakout natively                           |
+| `just build`        | Build the breakout binary                       |
+| `just build-wasm`   | Build the breakout wasm bundle into `examples/breakout/docs/` |
+| `just serve`        | Serve `examples/breakout/docs/` on `:8080`      |
+| `just run-wasm`     | build-wasm + serve                              |
 
 ## License
 
-MIT. See LICENSE.md.
+freecs-go is free, open source and permissively licensed. All code in this repository is dual-licensed under either:
+
+- MIT License ([LICENSE-MIT](LICENSE-MIT) or http://opensource.org/licenses/MIT)
+- Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE) or http://www.apache.org/licenses/LICENSE-2.0)
+
+at your option.

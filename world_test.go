@@ -44,14 +44,14 @@ func TestEntityAllocatorBumpsGeneration(t *testing.T) {
 
 func TestStaleHandleRejected(t *testing.T) {
 	world, posMask, _, _ := setup(t)
-	entity := Spawn(world, posMask)
-	if !Despawn(world, entity) {
+	entity := world.Spawn(posMask)
+	if !world.Despawn(entity) {
 		t.Fatal("despawn should report true")
 	}
 	if _, ok := Get[Position](world, entity); ok {
 		t.Fatal("stale handle should not resolve")
 	}
-	recycled := Spawn(world, posMask)
+	recycled := world.Spawn(posMask)
 	if recycled.ID != entity.ID {
 		t.Fatalf("expected reused id %d, got %d", entity.ID, recycled.ID)
 	}
@@ -68,7 +68,7 @@ func TestStaleHandleRejected(t *testing.T) {
 
 func TestSpawnReadWrite(t *testing.T) {
 	world, posMask, velMask, _ := setup(t)
-	entity := Spawn(world, posMask|velMask)
+	entity := world.Spawn(posMask | velMask)
 	Set(world, entity, Position{X: 1, Y: 2})
 	Set(world, entity, Velocity{X: 0.5, Y: 0.25})
 
@@ -84,7 +84,7 @@ func TestSpawnReadWrite(t *testing.T) {
 
 func TestAddRemoveComponentsMigration(t *testing.T) {
 	world, posMask, velMask, _ := setup(t)
-	entity := Spawn(world, posMask)
+	entity := world.Spawn(posMask)
 	Set(world, entity, Position{X: 3, Y: 4})
 
 	Add[Velocity](world, entity)
@@ -105,7 +105,7 @@ func TestAddRemoveComponentsMigration(t *testing.T) {
 		t.Fatalf("position lost across remove migration: %+v", position)
 	}
 
-	mask, _ := ComponentMask(world, entity)
+	mask, _ := world.ComponentMask(entity)
 	if mask != posMask {
 		t.Fatalf("expected final mask %b, got %b", posMask, mask)
 	}
@@ -114,14 +114,14 @@ func TestAddRemoveComponentsMigration(t *testing.T) {
 
 func TestDespawnCompactsAndSwaps(t *testing.T) {
 	world, posMask, _, _ := setup(t)
-	first := Spawn(world, posMask)
+	first := world.Spawn(posMask)
 	Set(world, first, Position{X: 10})
-	second := Spawn(world, posMask)
+	second := world.Spawn(posMask)
 	Set(world, second, Position{X: 20})
-	third := Spawn(world, posMask)
+	third := world.Spawn(posMask)
 	Set(world, third, Position{X: 30})
 
-	Despawn(world, second)
+	world.Despawn(second)
 
 	positionFirst, _ := Get[Position](world, first)
 	if positionFirst.X != 10 {
@@ -136,11 +136,11 @@ func TestDespawnCompactsAndSwaps(t *testing.T) {
 func TestQueryIter2(t *testing.T) {
 	world, posMask, velMask, _ := setup(t)
 	for i := 0; i < 4; i++ {
-		entity := Spawn(world, posMask|velMask)
+		entity := world.Spawn(posMask | velMask)
 		Set(world, entity, Position{X: float32(i)})
 		Set(world, entity, Velocity{X: 1})
 	}
-	standalone := Spawn(world, posMask)
+	standalone := world.Spawn(posMask)
 	Set(world, standalone, Position{X: 99})
 
 	count := 0
@@ -164,18 +164,18 @@ func TestQueryIter2(t *testing.T) {
 
 func TestQueryCacheGrowsWithNewArchetype(t *testing.T) {
 	world, posMask, velMask, hpMask := setup(t)
-	first := Spawn(world, posMask|velMask)
+	first := world.Spawn(posMask | velMask)
 	Set(world, first, Position{X: 1})
 
-	primed := CountQuery(world, posMask, 0)
+	primed := world.CountQuery(posMask, 0)
 	if primed != 1 {
 		t.Fatalf("expected 1 match for posMask, got %d", primed)
 	}
 
-	second := Spawn(world, posMask|velMask|hpMask)
+	second := world.Spawn(posMask | velMask | hpMask)
 	Set(world, second, Position{X: 2})
 
-	updated := CountQuery(world, posMask, 0)
+	updated := world.CountQuery(posMask, 0)
 	if updated != 2 {
 		t.Fatalf("expected 2 matches after new archetype, got %d", updated)
 	}
@@ -183,7 +183,7 @@ func TestQueryCacheGrowsWithNewArchetype(t *testing.T) {
 
 func TestChangeDetection(t *testing.T) {
 	world, posMask, _, _ := setup(t)
-	entity := Spawn(world, posMask)
+	entity := world.Spawn(posMask)
 	Set(world, entity, Position{X: 1})
 
 	world.Step()
@@ -194,7 +194,7 @@ func TestChangeDetection(t *testing.T) {
 		t.Fatalf("nothing changed this frame, expected 0, got %d", moved)
 	}
 
-	if position, ok := Mut[Position](world, entity); ok {
+	if position, ok := GetMut[Position](world, entity); ok {
 		position.X = 7
 	}
 
@@ -227,7 +227,7 @@ func TestEvents(t *testing.T) {
 
 func TestTags(t *testing.T) {
 	world, posMask, _, _ := setup(t)
-	entity := Spawn(world, posMask)
+	entity := world.Spawn(posMask)
 	AddTag[Player](world, entity)
 	if !HasTag[Player](world, entity) {
 		t.Fatal("tag should be present after AddTag")
@@ -243,7 +243,7 @@ func TestTags(t *testing.T) {
 		t.Fatalf("expected 1 player, got %d", count)
 	}
 
-	Despawn(world, entity)
+	world.Despawn(entity)
 	if HasTag[Player](world, entity) {
 		t.Fatal("despawn should drop tags")
 	}
@@ -251,21 +251,21 @@ func TestTags(t *testing.T) {
 
 func TestCommandBufferDeferredDespawn(t *testing.T) {
 	world, posMask, _, hpMask := setup(t)
-	deadOne := Spawn(world, posMask|hpMask)
+	deadOne := world.Spawn(posMask | hpMask)
 	Set(world, deadOne, Health{Value: 0})
-	alive := Spawn(world, posMask|hpMask)
+	alive := world.Spawn(posMask | hpMask)
 	Set(world, alive, Health{Value: 100})
 
 	Iter1[Health](world, 0, 0, func(entity Entity, health *Health) {
 		if health.Value <= 0 {
-			QueueDespawn(world, entity)
+			world.QueueDespawn(entity)
 		}
 	})
 
-	if CommandCount(world) != 1 {
-		t.Fatalf("expected 1 queued command, got %d", CommandCount(world))
+	if world.CommandCount() != 1 {
+		t.Fatalf("expected 1 queued command, got %d", world.CommandCount())
 	}
-	ApplyCommands(world)
+	world.ApplyCommands()
 
 	if _, ok := Get[Health](world, deadOne); ok {
 		t.Fatal("deadOne should be despawned")

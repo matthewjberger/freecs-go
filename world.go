@@ -5,9 +5,15 @@ import "reflect"
 // World owns every entity, archetype, and side structure (tags, events,
 // commands, resources). A World is not safe for concurrent use; wrap it in
 // a mutex if multiple goroutines need to touch it.
+//
+// A World must not be copied after first use. Copying duplicates the
+// archetype tables and side maps while still aliasing the allocator
+// through the shared pointer. The embedded noCopy sentinel makes go vet
+// flag accidental copies.
 type World struct {
+	_             noCopy
 	registry      *registry
-	allocator     allocator
+	allocator     *allocator
 	entityLocs    entityLocations
 	tables        []*Archetype
 	tableLookup   map[Mask]int
@@ -25,8 +31,13 @@ type World struct {
 // New creates an empty world. Components must be registered with
 // Register before they can be spawned, set, or queried.
 func New() *World {
+	return newWorldWithAllocator(&allocator{})
+}
+
+func newWorldWithAllocator(shared *allocator) *World {
 	return &World{
 		registry:    newRegistry(),
+		allocator:   shared,
 		tableLookup: make(map[Mask]int),
 		queryCache:  make(map[Mask][]int),
 		eventByType: make(map[reflect.Type]int),
@@ -85,10 +96,10 @@ func (w *World) wireEdgesForNewTable(newMask Mask, newTableIndex int) {
 			if existingIndex == newTableIndex {
 				continue
 			}
-			if existing.mask|bitMask == newMask {
+			if existing.Mask|bitMask == newMask {
 				w.tableEdges[existingIndex].add[bit] = int32(newTableIndex)
 			}
-			if existing.mask&^bitMask == newMask {
+			if existing.Mask&^bitMask == newMask {
 				w.tableEdges[existingIndex].remove[bit] = int32(newTableIndex)
 			}
 		}
@@ -116,7 +127,7 @@ func (w *World) cachedTables(include Mask) []int {
 	}
 	matching := make([]int, 0, len(w.tables))
 	for index, table := range w.tables {
-		if table.mask&include == include {
+		if table.Mask&include == include {
 			matching = append(matching, index)
 		}
 	}

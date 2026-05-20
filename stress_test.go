@@ -24,7 +24,7 @@ func TestGCSafeWithPointerComponents(t *testing.T) {
 	entities := make([]Entity, count)
 	for index := 0; index < count; index++ {
 		name := "sprite-" + string(rune('A'+index%26))
-		entity := Spawn(world, MaskOf[Sprite](world)|MaskOf[Transform](world))
+		entity := world.Spawn(MaskOf[Sprite](world) | MaskOf[Transform](world))
 		Set(world, entity, Sprite{Name: &name})
 		Set(world, entity, Transform{X: float32(index)})
 		entities[index] = entity
@@ -51,7 +51,7 @@ func TestGCSafeWithPointerComponents(t *testing.T) {
 
 func TestRepeatedMigrationKeepsValues(t *testing.T) {
 	world, posMask, velMask, hpMask := setup(t)
-	entity := Spawn(world, posMask)
+	entity := world.Spawn(posMask)
 	Set(world, entity, Position{X: 100, Y: 200})
 
 	for round := 0; round < 50; round++ {
@@ -77,9 +77,9 @@ func TestRepeatedMigrationKeepsValues(t *testing.T) {
 func TestLargeBatchAndQueryWalk(t *testing.T) {
 	world, posMask, velMask, _ := setup(t)
 	const count = 5000
-	entities := SpawnBatch(world, posMask|velMask, count, func(table *Archetype, index int) {
-		positions := Column[Position](world, table)
-		velocities := Column[Velocity](world, table)
+	entities := world.SpawnBatch(posMask|velMask, count, func(table *Archetype, index int) {
+		positions, _ := Column[Position](world, table)
+		velocities, _ := Column[Velocity](world, table)
 		positions[index] = Position{X: float32(index)}
 		velocities[index] = Velocity{X: 1, Y: 2}
 	})
@@ -110,7 +110,7 @@ func TestLargeBatchAndQueryWalk(t *testing.T) {
 
 func TestEdgeCacheUsedAfterFirstMiss(t *testing.T) {
 	world, posMask, _, _ := setup(t)
-	first := Spawn(world, posMask)
+	first := world.Spawn(posMask)
 	Add[Velocity](world, first)
 	startEdge := world.tableEdges[world.tableLookup[posMask]].add[1]
 	if startEdge < 0 {
@@ -118,7 +118,7 @@ func TestEdgeCacheUsedAfterFirstMiss(t *testing.T) {
 	}
 
 	for i := 0; i < 100; i++ {
-		entity := Spawn(world, posMask)
+		entity := world.Spawn(posMask)
 		Add[Velocity](world, entity)
 		Remove[Velocity](world, entity)
 	}
@@ -130,7 +130,7 @@ func TestEdgeCacheUsedAfterFirstMiss(t *testing.T) {
 
 func TestChangeDetectionAcrossFrames(t *testing.T) {
 	world, posMask, _, _ := setup(t)
-	entity := Spawn(world, posMask)
+	entity := world.Spawn(posMask)
 	Set(world, entity, Position{X: 1})
 
 	world.Step()
@@ -139,7 +139,7 @@ func TestChangeDetectionAcrossFrames(t *testing.T) {
 		t.Fatal("frame 1: expected not changed")
 	}
 
-	if pos, ok := Mut[Position](world, entity); ok {
+	if pos, ok := GetMut[Position](world, entity); ok {
 		pos.X = 2
 	}
 
@@ -156,8 +156,8 @@ func TestChangeDetectionAcrossFrames(t *testing.T) {
 
 func TestIter2ExcludeMask(t *testing.T) {
 	world, posMask, velMask, hpMask := setup(t)
-	withHealth := Spawn(world, posMask|velMask|hpMask)
-	withoutHealth := Spawn(world, posMask|velMask)
+	withHealth := world.Spawn(posMask | velMask | hpMask)
+	withoutHealth := world.Spawn(posMask | velMask)
 	Set(world, withHealth, Position{X: 1})
 	Set(world, withoutHealth, Position{X: 2})
 
@@ -198,10 +198,10 @@ func TestEventBufferRollover(t *testing.T) {
 
 func TestQueueSetAddsComponent(t *testing.T) {
 	world, posMask, _, _ := setup(t)
-	entity := Spawn(world, posMask)
+	entity := world.Spawn(posMask)
 
 	QueueSet(world, entity, Velocity{X: 9})
-	ApplyCommands(world)
+	world.ApplyCommands()
 
 	if !Has[Velocity](world, entity) {
 		t.Fatal("QueueSet should add the component")
@@ -214,22 +214,22 @@ func TestQueueSetAddsComponent(t *testing.T) {
 
 func TestNestedQueueDuringApply(t *testing.T) {
 	world, posMask, _, _ := setup(t)
-	first := Spawn(world, posMask)
+	first := world.Spawn(posMask)
 
-	Queue(world, func(w *World) {
-		Despawn(w, first)
-		QueueSpawn(w, posMask)
+	world.Queue(func(w *World) {
+		w.Despawn(first)
+		w.QueueSpawn(posMask)
 	})
-	ApplyCommands(world)
+	world.ApplyCommands()
 
 	if _, ok := Get[Position](world, first); ok {
 		t.Fatal("first should be despawned")
 	}
-	if CommandCount(world) != 1 {
-		t.Fatalf("expected nested QueueSpawn left in buffer, got %d", CommandCount(world))
+	if world.CommandCount() != 1 {
+		t.Fatalf("expected nested QueueSpawn left in buffer, got %d", world.CommandCount())
 	}
-	ApplyCommands(world)
-	if CountQuery(world, posMask, 0) != 1 {
-		t.Fatalf("expected one alive entity after nested apply, got %d", CountQuery(world, posMask, 0))
+	world.ApplyCommands()
+	if world.CountQuery(posMask, 0) != 1 {
+		t.Fatalf("expected one alive entity after nested apply, got %d", world.CountQuery(posMask, 0))
 	}
 }

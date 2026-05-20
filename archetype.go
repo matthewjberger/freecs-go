@@ -1,16 +1,20 @@
 package freecs
 
 // Archetype is one storage table holding every entity that has exactly the
-// component set described by mask. Component columns live at the bit index
-// of their component; bits not set in mask have a nil column pointer.
+// component set described by Mask. Component columns live at the bit index
+// of their component; bits not set in Mask have no column.
+//
+// Mask and Entities are exported so callbacks can read them directly during
+// iteration. Do not mutate either field; structural changes go through the
+// World methods (Spawn, Despawn, AddComponents, RemoveComponents).
 type Archetype struct {
-	mask     Mask
-	entities []Entity
+	Mask     Mask
+	Entities []Entity
 	columns  [maxComponents]*column
 }
 
 func newArchetype(mask Mask, reg *registry) *Archetype {
-	table := &Archetype{mask: mask}
+	table := &Archetype{Mask: mask}
 	for bit := uint8(0); bit < maxComponents; bit++ {
 		if mask&(Mask(1)<<bit) == 0 {
 			continue
