@@ -1,12 +1,12 @@
 # Performance
 
-freecs-go's performance story is "hot path stays hot, cold path is acceptable." This document is an honest accounting of where the cycles go, what's fast, what's slow, and what the design tradeoffs cost in practice.
+A frame-rate-bound game spends most of its CPU time in iteration. A handful of systems run each frame, each system walks one or more queries, and each query touches every matching entity. Structural change (spawn, despawn, add or remove components) runs at much lower volume: a few dozen per frame in steady state, sometimes a few thousand in a single burst at level load. freecs-go is shaped around that asymmetry. The hot iteration path is sequential reads through typed memory with no per-element reflection. The cold structural-change path uses `reflect` for column allocation and migration, because the GC has to track the pointers and the reflect cost amortizes across the lifetime of the column.
+
+This post is the honest accounting of where the cycles go.
 
 ## The hot path
 
-The hot path is iteration. A frame-rate-bound game runs a handful of systems each frame, each system walks one or more queries, and each query touches every matching entity. The cost of iteration directly determines how many entities the game can afford to have.
-
-Consider a typical inner loop:
+A typical inner loop:
 
 ```go
 freecs.Iter2[Position, Velocity](world, 0, 0, func(_ freecs.Entity, position *Position, velocity *Velocity) {
@@ -15,20 +15,11 @@ freecs.Iter2[Position, Velocity](world, 0, 0, func(_ freecs.Entity, position *Po
 })
 ```
 
-What actually happens per archetype:
+Per archetype, the library does the same handful of operations every iteration. It hits the query cache for the matching archetype list (a hashmap lookup, one probe). For each archetype, it reads `table.Mask & exclude` to skip excluded archetypes (one CPU instruction) and `count := len(table.Entities)` to bound the inner loop (one load). It builds typed slice views over the columns with `unsafe.Slice`, which is two slice header constructions on the stack with no allocation. Then it runs the inner loop, which loads `table.Entities[i]` if the callback uses it (the compiler elides the load when the entity parameter is `_`), computes `&aSlice[i]` and `&bSlice[i]` with one bounds check each unless the compiler proves them safe, and calls the closure.
 
-1. `world.cachedTables(POSITION | VELOCITY)` is a hashmap lookup. One probe.
-2. For each matching archetype, read `table.Mask & exclude` (one CPU instruction).
-3. Read `count := len(table.Entities)` (a slice header field load).
-4. Build typed slice views via `unsafe.Slice` on the column data pointers. Two slice header constructions on the stack. No allocation.
-5. Loop `count` iterations. Each iteration:
-   - Load `table.Entities[i]` (it's read but the callback ignores it; the compiler can optimize this load away when the callback parameter is `_`).
-   - Compute `&aSlice[i]` and `&bSlice[i]` (one bounds check each unless the compiler proves them safe, plus pointer arithmetic).
-   - Call the closure with three pointers.
+The closure call is the only thing that is not pure pointer arithmetic. The Go compiler cannot inline across closure boundaries today, so each iteration has the function call cost. For closures that do real work (vector math, multiple field updates) the call cost is amortized. For trivial closures (one field add) the call cost becomes a meaningful fraction of the loop.
 
-The closure call is the only thing that's not pure pointer arithmetic. The Go compiler can't inline across closure boundaries today, so each iteration has the function call cost. For closures that do real work (vector math, multiple field updates), the call cost is amortized. For trivial closures (one field add), the call cost becomes meaningful.
-
-If you measure the inner loop with `pprof` and the closure call shows up as a hotspot, the workaround is `world.ForEach` plus `freecs.Column[T]` to get typed slices in scope and write the loop body directly:
+If you profile an inner loop with `pprof` and the closure call shows up as a hotspot, the workaround is `world.ForEach` plus `freecs.Column[T]`. The slices come into scope and the loop body is written directly:
 
 ```go
 world.ForEach(POSITION|VELOCITY, 0, func(_ freecs.Entity, table *freecs.Archetype, _ int) {
@@ -41,106 +32,78 @@ world.ForEach(POSITION|VELOCITY, 0, func(_ freecs.Entity, table *freecs.Archetyp
 })
 ```
 
-Now the inner loop has no per-element function call. The compiler can vectorize it the same way it would for any plain slice loop.
+Now the inner loop has no per-element function call. The compiler can vectorize it the same way it would for any plain slice loop, and the bounds checks tend to eliminate cleanly because the loop bound and the index come from the same `len`.
 
 ## The cold path
 
-The cold path is structural change: spawn, despawn, add components, remove components. These don't run per-frame for every entity; they run per spawn or per state transition. Modest churn doesn't matter; a level loading thousands of entities at once does.
+Structural change is `Spawn`, `Despawn`, `AddComponents`, `RemoveComponents`, and the typed wrappers around them. These do not run per-frame for every entity; they run per spawn or per state transition. Modest churn does not matter. A level loading thousands of entities at once is when the costs add up.
 
-The biggest cold-path cost is reflection in column operations:
+The biggest cold-path cost is reflection in column operations. `column.pushZero` calls `reflect.Append(c.slice, reflect.Zero(c.elemType))`. Each call allocates a fresh `reflect.Value` for the zero, and `reflect.Append` may reallocate the backing array. `column.migrateFrom` calls `reflect.Append(c.slice, src.slice.Index(srcIndex))` with the same allocation pattern. `column.swapRemove` calls `c.slice.Index(index).Set(c.slice.Index(last))` followed by `c.slice.Slice(0, last)`; the `Set` path goes through `reflect.Value.Set` which type-checks at runtime.
 
-- `column.pushZero` calls `reflect.Append(c.slice, reflect.Zero(c.elemType))`. Each call allocates a fresh `reflect.Value` for the zero, then `reflect.Append` may reallocate the backing array. Multiple allocations per push.
-- `column.migrateFrom` calls `reflect.Append(c.slice, src.slice.Index(srcIndex))`. Same allocation pattern.
-- `column.swapRemove` calls `c.slice.Index(index).Set(c.slice.Index(last))` and `c.slice.Slice(0, last)`. The `Set` path goes through `reflect.Value.Set` which type-checks at runtime.
+For an entity with five components, a single `Spawn` involves five `reflect.Append` calls. A migration that moves three columns from source to destination and pushes two new defaults is eight reflection calls plus three swap-removes. Each reflect call is in the hundreds of nanoseconds. A migration of an entity with five components is probably in the 5-15 microsecond range, depending on whether `reflect.Append` reallocates.
 
-For an entity with five components, a single `Spawn` involves five `reflect.Append` calls. For a migration that moves three columns from source to destination and pushes two new defaults, it's eight reflection calls plus three `swap_remove` operations.
+For a typical game spawning a few dozen entities per frame, this is well below the per-frame budget. For a project that spawns thousands of entities at once (level load, mass particle emission), the cost is real but front-loaded; it does not sit on the per-frame critical path.
 
-A back-of-envelope estimate: each reflect call is in the hundreds of nanoseconds. A migration of an entity with 5 components is probably in the 5-15 microseconds range, depending on whether `reflect.Append` reallocates.
+## Allocations per frame
 
-For a typical game spawning a few dozen entities per frame, this is well below the per-frame budget. For a project that spawns thousands of entities at once (level load, mass particle emission), the cost is real but front-loaded; it's not on the per-frame critical path.
+After warmup, the per-frame allocation profile is small. `world.cachedTables` returns the cached slice for any query mask that has been seen before; new query masks pay a one-time allocation. `freecs.Iter*` and `freecs.ParallelIter*` build typed slice views with `unsafe.Slice`, and the slice headers are stack values. `world.QueueX` methods allocate one closure each, which is a small heap object plus whatever variables the closure captures; for a few hundred queued commands per frame this is negligible. `freecs.Send[T]` may grow the event queue's `current` slice via `append`, which is amortized O(1). `world.Step` does not allocate.
 
-## Allocation summary
+Per-structural-change, the allocations are concentrated. `reflect.MakeSlice` runs once when an archetype is first created. `reflect.Append` may allocate when a column grows. `getOrCreateTable` allocates an `Archetype` and its `tableEdges` on first use of a new mask, also a one-time cost per unique component set.
 
-Per-frame allocations from the library:
-
-- `world.cachedTables` returns a slice that may be cached or freshly built. After warmup, every iteration returns the same backing slice, no allocation.
-- `freecs.Iter*` and `freecs.ParallelIter*` build typed slice views via `unsafe.Slice`. The slice headers are stack values; no allocation.
-- `world.QueueX` methods allocate one closure each (a small heap object plus the captured variables). For a few hundred queued commands per frame this is fine.
-- `freecs.Send[T]` may grow the event queue's `current` slice via `append`. Amortized O(1).
-- `world.Step` doesn't allocate.
-
-Per-structural-change allocations:
-
-- `reflect.MakeSlice` when an archetype is first created. One-time per unique component set.
-- `reflect.Append` may allocate when a column grows. Amortized.
-- `getOrCreateTable` allocates an `Archetype` and its `tableEdges` on first use of a new mask. One-time per unique component set.
-
-The two patterns that allocate the most per frame:
-
-1. Spawn-heavy systems (bullet hells, particle emitters). Each spawn pushes onto every relevant column, each push goes through `reflect.Append`, each `reflect.Append` may reallocate. Mitigate with `world.SpawnBatch` which amortizes the slice growth across the batch.
-
-2. Command-buffer-heavy systems. Each `Queue*` call allocates a closure. For one-off queues this is negligible; for thousands per frame it adds up. If the cost matters, restructure: collect pending operations in a typed slice and apply them in a loop after the iteration, avoiding the closure cost.
+The two patterns that allocate the most per frame in real workloads are spawn-heavy systems (bullet hells, particle emitters) and command-buffer-heavy systems. The spawn-heavy case pushes onto every relevant column, each push goes through `reflect.Append`, and each `reflect.Append` may reallocate. `world.SpawnBatch` is the mitigation; it amortizes the slice growth across the batch. The command-buffer-heavy case allocates one closure per `Queue*` call. For one-off queues this is negligible; for thousands per frame it adds up. If the cost matters, restructure to collect pending operations in a typed slice and apply them in a loop after the iteration, skipping the closure entirely.
 
 ## Compared to a typed-column ECS
 
 freecs-go uses reflection because Go has no generic struct fields. A library that did codegen instead (one typed `[]T` field per component) would skip the reflection entirely on the cold path. The inner loop would be identical.
 
-Concretely, the speedup from codegen-over-reflection would be:
+The speedup from codegen-over-reflection lands roughly at two to five times faster on spawn (no `reflect.Append`, just a typed slice append), similar on despawn, two to three times faster on migration. Iteration is unchanged because the hot path already bypasses reflect.
 
-- Spawn: ~2-5x faster (no reflect.Append, just typed slice append).
-- Despawn: similar.
-- Migration: ~2-3x faster.
-- Iteration: no difference.
+For games that spawn modestly and iterate aggressively, the speed difference does not matter; iteration dominates and is already as fast as it can be. For games with extreme spawn churn (bullet hells, large-particle simulations) codegen would help, but `SpawnBatch` closes most of the gap by amortizing the per-entity reflect cost across the batch.
 
-For games that spawn modestly and iterate aggressively, the speed difference is irrelevant; iteration dominates and is already as fast as it can be. For games with extreme spawn churn (bullet hells, large-particle simulations), codegen would help, but `SpawnBatch` closes much of the gap.
-
-The Rust freecs design uses a macro to do exactly this codegen. freecs-go could ship a `go generate` helper that emits typed accessors on top of the generic core, but the generic core is what's needed regardless; the codegen would be a thin wrapper.
+The Rust freecs design uses a macro to do exactly this codegen. freecs-go could ship a `go generate` helper that emits typed accessors on top of the generic core, but the generic core is what is needed regardless; the codegen would be a thin wrapper.
 
 ## Compared to a typed-pointer-arithmetic ECS
 
-A library that stored each column as `[]byte` aliasing typed memory and accessed elements via `unsafe.Add(ptr, i*size)` would skip reflection on the cold path too. But that's not safe in Go: the GC tracks slices by element type, and `[]byte` is treated as `noscan` (no pointer scanning), so any pointer fields inside components would silently be lost.
+A library that stored each column as `[]byte` aliasing typed memory and accessed elements with `unsafe.Add(ptr, i*size)` would skip reflection on the cold path too. That approach is not safe in Go. The garbage collector tracks slices by element type, and `[]byte` is treated as `noscan` (no pointer scanning), so any pointer fields inside components would silently be lost.
 
-freecs-go uses `reflect.MakeSlice` for allocation precisely to keep the GC informed. On the hot path it falls back to `unsafe.Slice` for typed views, which works because the underlying memory was allocated with a known element type.
+freecs-go uses `reflect.MakeSlice` for allocation precisely to keep the GC informed of the slice's true element type. On the hot path it falls back to `unsafe.Slice` for typed views, which is safe because the underlying memory was allocated with a known element type that the GC already tracks.
 
-The library `arche` is the Go ECS that's closest to "typed pointer arithmetic" for column storage. It's faster than freecs-go on the cold path but has the same hot path performance, and trades some flexibility for the speed.
+The library `arche` is the Go ECS that comes closest to "typed pointer arithmetic" for column storage. It is faster than freecs-go on the cold path and has the same hot path performance, with some flexibility traded for the speed.
 
-## Things that look slow but aren't
+## Things that look slow but are not
 
-Several patterns in the codebase look like they might cost something but don't, at least not in the inner loop.
+The `reflect.Value` field on `column` carries the underlying slice's type info. The hot path never touches it. `dataPtr` is cached at column construction time; index access goes through `unsafe.Slice` which does not consult the reflect value.
 
-**`reflect.Value` field on column**. The reflect value carries the underlying slice's type info, but the hot path never touches it. `dataPtr` is cached; index access goes through `unsafe.Slice` which doesn't consult the reflect value.
+The type-erased event, tag, and resource storage via `reflect.Type` map keys looks like it would cost something. The lookup happens once per `Send` or `AddTag` or `Resource` call, not per element. For a system that sends one event and reads one resource per frame, the cost is invisible.
 
-**Type-erased event/tag/resource storage via `reflect.Type` map keys**. The lookup happens once per `Send` / `AddTag` / `Resource` call, not per element. For a system that sends one event and reads one resource per frame, the lookup cost is negligible.
+The parallel `changed []uint32` slice next to every component column looks like extra memory pressure. It is read only by `IterChanged*` and `Changed`. Regular `Iter*` does not touch it. The write happens once per `GetMut`/`Set`/spawn/migration, off the hot iteration path.
 
-**The `changed []uint32` parallel slice**. It's only read by `IterChanged*` and `Changed`. Regular `Iter*` doesn't touch it. The write happens once per `GetMut`/`Set`/spawn/migration, off the hot iteration path.
-
-**`Archetype.columns [64]*column`**. Sparse array with most entries nil. Looks wasteful at 512 bytes per archetype, but the indexing is a single load on the hot path, and 512 bytes is negligible compared to the actual column data.
+The `Archetype.columns [64]*column` sparse array with mostly-nil entries looks wasteful at 512 bytes per archetype. The indexing is a single load on the hot path, and 512 bytes per archetype is negligible compared to the actual column data.
 
 ## Things that genuinely cost time
 
-**Closure call per element in `Iter*`**. The Go compiler can't inline through a closure parameter. For trivial inner bodies this is the biggest single overhead. Workaround: use `world.ForEach` plus `freecs.Column[T]` and write the loop body directly.
+The closure call per element in `Iter*` is the biggest single overhead in the inner loop. The Go compiler cannot inline through a closure parameter. For trivial bodies this dominates the per-iteration cost. The workaround is `world.ForEach` plus `freecs.Column[T]`.
 
-**`reflect.Append` on every column push**. Mitigate with `SpawnBatch` for spawn-heavy paths.
+`reflect.Append` on every column push is the second. `SpawnBatch` is the mitigation for spawn-heavy paths.
 
-**Goroutine launch in `ParallelIter*`**. Each call launches fresh goroutines per archetype. For tiny archetypes, the launch dominates. Use the serial form when archetypes are small.
+Goroutine launch in `ParallelIter*` matters when archetypes are small. Each call launches fresh goroutines per archetype, and the launch overhead can swamp the per-archetype work for tiny archetypes. Use the serial form when archetypes are small.
 
-**Bounds checks in `aSlice[i]`**. The Go compiler eliminates these only when it can prove the index is in range from local context. For typed slice views built via `unsafe.Slice`, the compiler often can't prove safety. Each access pays one compare and branch.
-
-If a hot loop is bound-check-limited, profile with `go build -gcflags=-d=ssa/check_bce/debug=1` to see which loads can't be eliminated, then either restructure the loop or accept the cost. Most loops accept it because the bound checks are predictable and cheap; pipelined branches are practically free.
+Bounds checks in `aSlice[i]` add a compare and branch per access. The Go compiler eliminates them only when it can prove the index is in range from local context, and for slice views built via `unsafe.Slice` the compiler often cannot. Profile with `go build -gcflags=-d=ssa/check_bce/debug=1` to see which loads cannot be eliminated. Most loops accept the cost because the branches are predictable and cheap; pipelined branches are practically free.
 
 ## Practical sizing
 
-For a game with:
+For a game with a few hundred entities and a dozen-ish component types in steady state, any pattern works. The library is overkill for this scale but does not hurt.
 
-- A few hundred entities, dozen-ish component types, mostly steady state: any pattern works. The library is overkill for this scale but won't hurt.
-- A few thousand entities, dozens of archetypes, moderate spawn churn: the standard hot path holds up. Use `SpawnBatch` for bulk spawns.
-- Tens of thousands of entities, complex archetypes, heavy spawn churn (particle systems): use `world.ForEach` plus `freecs.Column[T]` for inner loops, `SpawnBatch` everywhere, consider `ParallelIter*` for systems that touch every entity each frame.
-- Hundreds of thousands of entities: profile and re-architect. The 64-component ceiling will probably bite first, multi-world is the answer; reflection overhead on the cold path will probably bite second, batch your structural changes.
+For a few thousand entities, dozens of archetypes, and moderate spawn churn, the standard hot path holds up. Use `SpawnBatch` for bulk spawns and `Iter*` everywhere else.
+
+For tens of thousands of entities, complex archetypes, and heavy spawn churn (particle systems), use `world.ForEach` plus `freecs.Column[T]` for inner loops, `SpawnBatch` everywhere, and `ParallelIter*` for systems that touch every entity each frame.
+
+Past a hundred thousand entities, profile and re-architect. The 64-component ceiling will probably bite first; multi-world is the answer. Reflection overhead on the cold path will probably bite second; batch the structural changes.
 
 ## Where to look in the code
 
 - [`column.go`](../column.go), where the reflect/unsafe split lives
 - [`spawn.go`](../spawn.go), the structural-change paths and their cost
-- [`query.go`](../query.go), the iteration helpers
-- [`parallel.go`](../parallel.go), the goroutine-per-archetype fan-out
+- [`query.go`](../query.go), the iteration helpers and `ForEach`
+- [`iter_gen.go`](../iter_gen.go) and [`parallel_gen.go`](../parallel_gen.go), the generated `Iter*` and `ParallelIter*`
 - [`world.go`](../world.go), `cachedTables` and the query cache
