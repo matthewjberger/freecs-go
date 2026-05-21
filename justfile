@@ -37,11 +37,11 @@ audit: check tidy-check outdated test
 
 # Breakout (desktop): build and run
 run:
-    cd examples/breakout && go run .
+    go run -C examples/breakout .
 
 # Breakout (desktop): build only
 build:
-    cd examples/breakout && go build .
+    go build -C examples/breakout .
 
 # Breakout (wasm): build into examples/breakout/docs/
 build-wasm:
@@ -50,7 +50,7 @@ build-wasm:
 
 # Breakout (wasm): serve docs/ at http://localhost:8080
 serve:
-    cd examples/breakout && go run ./cmd/serve
+    go run -C examples/breakout ./cmd/serve
 
 # Breakout (wasm): build + serve
 run-wasm: build-wasm serve

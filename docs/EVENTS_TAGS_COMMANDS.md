@@ -190,8 +190,11 @@ Storage is one box per type, identified by `reflect.TypeOf((*T)(nil)).Elem()`. T
 
 ```go
 freecs.SetResource(world, DeltaTime(0.016))
-delta := freecs.Resource[DeltaTime](world)   // *DeltaTime
-*delta = 0.033                                // mutate in place
+delta, ok := freecs.Resource[DeltaTime](world)   // (*DeltaTime, bool)
+if ok {
+    *delta = 0.033                                // mutate in place
+}
+delta = freecs.MustResource[DeltaTime](world)    // panics if missing
 freecs.HasResource[DeltaTime](world)
 freecs.RemoveResource[DeltaTime](world)
 ```
@@ -209,7 +212,7 @@ func SetResource[T any](world *World, value T) {
 }
 ```
 
-This matters when a system caches `delta := freecs.Resource[DeltaTime](world)` at startup and reads `*delta` every frame. Without the in-place update, `SetResource` would replace the boxed pointer and the cached `*delta` would point at the old value.
+This matters when a system caches `delta := freecs.MustResource[DeltaTime](world)` at startup and reads `*delta` every frame. Without the in-place update, `SetResource` would replace the boxed pointer and the cached `*delta` would point at the old value.
 
 ### Define named types
 
@@ -223,8 +226,8 @@ freecs.SetResource(world, DeltaTime(0.016))
 freecs.SetResource(world, GameTime(0))
 
 // distinct, indexed by reflect.Type
-*freecs.Resource[DeltaTime](world) = 0.033
-*freecs.Resource[GameTime](world) += 0.016
+*freecs.MustResource[DeltaTime](world) = 0.033
+*freecs.MustResource[GameTime](world) += 0.016
 ```
 
 Using bare `float32` for both would conflict; the second `SetResource` would overwrite the first.

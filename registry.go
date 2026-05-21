@@ -66,15 +66,26 @@ func Register[T any](world *World) Mask {
 	return info.mask
 }
 
-// MaskOf returns the Mask for component type T. It panics if T has not been
-// registered. Use Register first.
-func MaskOf[T any](world *World) Mask {
+// MaskOf returns the Mask for component type T and true if T is
+// registered, or (0, false) otherwise.
+func MaskOf[T any](world *World) (Mask, bool) {
 	elemType := reflect.TypeOf((*T)(nil)).Elem()
 	info, ok := world.registry.infoForType(elemType)
 	if !ok {
+		return 0, false
+	}
+	return info.mask, true
+}
+
+// MustMaskOf returns the Mask for T or panics if T is not registered.
+// Use MaskOf for optional lookups.
+func MustMaskOf[T any](world *World) Mask {
+	m, ok := MaskOf[T](world)
+	if !ok {
+		elemType := reflect.TypeOf((*T)(nil)).Elem()
 		panic(fmt.Sprintf("freecs: component %s is not registered, call freecs.Register[%s] first", elemType, elemType))
 	}
-	return info.mask
+	return m
 }
 
 // componentInfoFor returns the registered info for T, or (nil, false) when

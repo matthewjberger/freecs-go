@@ -6,6 +6,7 @@ import "math/bits"
 // by mask. Every component listed in mask is initialized to the zero value
 // of its type; use Set or SpawnBatch with an initializer to fill them in.
 func (w *World) Spawn(mask Mask) Entity {
+	w.guardStructuralMutation("Spawn")
 	entity := w.allocator.allocate()
 	w.placeEntityInArchetype(entity, mask)
 	return entity
@@ -19,6 +20,7 @@ func (w *World) Spawn(mask Mask) Entity {
 // Panics if the entity is already placed in this world. Use AddComponents
 // or RemoveComponents to migrate a placed entity between archetypes.
 func (w *World) SpawnEntityInto(entity Entity, mask Mask) {
+	w.guardStructuralMutation("SpawnEntityInto")
 	if _, _, ok := w.entityLocs.get(entity); ok {
 		panic("freecs: SpawnEntityInto called for an entity that already has a row in this world; use AddComponents/RemoveComponents to change its archetype")
 	}
@@ -44,6 +46,7 @@ func (w *World) placeEntityInArchetype(entity Entity, mask Mask) {
 // freshly-pushed slot with direct table access, in the order they were
 // spawned. Returns the new entity handles.
 func (w *World) SpawnBatch(mask Mask, count int, init func(table *Archetype, index int)) []Entity {
+	w.guardStructuralMutation("SpawnBatch")
 	if count <= 0 {
 		return nil
 	}
@@ -78,6 +81,7 @@ func (w *World) SpawnBatch(mask Mask, count int, init func(table *Archetype, ind
 // calling Despawn against one of the child worlds would deallocate the
 // entity id while other worlds still hold archetype rows for it.
 func (w *World) Despawn(entity Entity) bool {
+	w.guardStructuralMutation("Despawn")
 	if !despawnFromArchetype(w, entity) {
 		return false
 	}
@@ -94,6 +98,7 @@ func despawnFromArchetype(world *World, entity Entity) bool {
 		return false
 	}
 	world.entityLocs.markDeallocated(entity.ID)
+	Send(world, EntityDespawned{Entity: entity})
 
 	for _, set := range world.tagSets {
 		delete(set, entity)
@@ -139,6 +144,7 @@ func (w *World) AddComponents(entity Entity, mask Mask) bool {
 	if currentMask&mask == mask {
 		return true
 	}
+	w.guardStructuralMutation("AddComponents")
 
 	var destTableIndex int
 	if bits.OnesCount64(uint64(mask)) == 1 {
@@ -168,6 +174,7 @@ func (w *World) RemoveComponents(entity Entity, mask Mask) bool {
 	if currentMask&mask == 0 {
 		return true
 	}
+	w.guardStructuralMutation("RemoveComponents")
 
 	var destTableIndex int
 	if bits.OnesCount64(uint64(mask)) == 1 {

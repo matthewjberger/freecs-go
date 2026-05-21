@@ -64,7 +64,7 @@ func main() {
     freecs.AddTag[Player](world, player)
 
     physics := func(w *freecs.World) {
-        delta := float32(*freecs.Resource[DeltaTime](w))
+        delta := float32(*freecs.MustResource[DeltaTime](w))
         freecs.Iter2[Position, Velocity](w, 0, 0, func(_ freecs.Entity, position *Position, velocity *Velocity) {
             position.X += velocity.X * delta
             position.Y += velocity.Y * delta
@@ -105,7 +105,7 @@ HEALTH   := freecs.Register[Health](world)     // bit 2
 mask := POSITION | VELOCITY
 ```
 
-`freecs.MaskOf[Position](world)` returns the mask for a previously-registered type. It panics if `T` was never registered.
+`freecs.MaskOf[Position](world)` returns `(Mask, true)` for a previously-registered type or `(0, false)` otherwise. Use `freecs.MustMaskOf[Position](world)` for the panicking variant when registration is an invariant.
 
 ### Spawning
 
@@ -240,8 +240,11 @@ type GameTime float32
 freecs.SetResource(world, DeltaTime(0.016))
 freecs.SetResource(world, GameTime(0))
 
-delta := freecs.Resource[DeltaTime](world)   // *DeltaTime
-*delta = 0.033
+delta, ok := freecs.Resource[DeltaTime](world)   // (*DeltaTime, bool)
+if ok {
+    *delta = 0.033
+}
+delta = freecs.MustResource[DeltaTime](world)    // panics if missing
 
 freecs.HasResource[GameTime](world)
 freecs.RemoveResource[GameTime](world)

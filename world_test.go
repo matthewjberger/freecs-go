@@ -278,12 +278,12 @@ func TestCommandBufferDeferredDespawn(t *testing.T) {
 func TestResources(t *testing.T) {
 	world := New()
 	SetResource(world, DeltaTime(0.016))
-	delta := Resource[DeltaTime](world)
+	delta := MustResource[DeltaTime](world)
 	if *delta != 0.016 {
 		t.Fatalf("expected 0.016, got %v", *delta)
 	}
 	*delta = 0.033
-	if *Resource[DeltaTime](world) != 0.033 {
+	if *MustResource[DeltaTime](world) != 0.033 {
 		t.Fatal("mutation through pointer should persist")
 	}
 }

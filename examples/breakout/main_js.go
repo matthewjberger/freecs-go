@@ -78,8 +78,8 @@ func main() {
 		event := args[0]
 		key := event.Get("key").String()
 		held := event.Get("type").String() == "keydown"
-		input := freecs.Resource[Input](world)
-		state := freecs.Resource[GameState](world)
+		input := freecs.MustResource[Input](world)
+		state := freecs.MustResource[GameState](world)
 		switch key {
 		case "ArrowLeft", "a", "A":
 			input.Left = held
@@ -109,7 +109,7 @@ func main() {
 		if dt > 0.05 {
 			dt = 0.05
 		}
-		*freecs.Resource[DeltaTime](world) = DeltaTime(dt)
+		*freecs.MustResource[DeltaTime](world) = DeltaTime(dt)
 
 		schedule.Run(world)
 		world.ApplyCommands()

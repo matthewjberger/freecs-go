@@ -86,8 +86,8 @@ func main() {
 			w.SetShouldClose(true)
 			return
 		}
-		input := freecs.Resource[Input](world)
-		state := freecs.Resource[GameState](world)
+		input := freecs.MustResource[Input](world)
+		state := freecs.MustResource[GameState](world)
 		switch action {
 		case glfw.Press, glfw.Repeat:
 			switch key {
@@ -124,7 +124,7 @@ func main() {
 		if dt > 0.05 {
 			dt = 0.05
 		}
-		*freecs.Resource[DeltaTime](world) = DeltaTime(dt)
+		*freecs.MustResource[DeltaTime](world) = DeltaTime(dt)
 
 		schedule.Run(world)
 		world.ApplyCommands()
@@ -144,7 +144,7 @@ func main() {
 			}
 		}
 
-		state := freecs.Resource[GameState](world)
+		state := freecs.MustResource[GameState](world)
 		title := fmt.Sprintf("Breakout — score %d   lives %d", state.Score, state.Lives)
 		if state.Won {
 			title += "   (you win, press R)"

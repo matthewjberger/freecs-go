@@ -52,7 +52,7 @@ type Ball struct{}
 type Paddle struct{}
 
 // Resources are world-scoped values keyed by type. Define named types so
-// freecs.Resource[T] can distinguish them.
+// freecs.MustResource[T] can distinguish them.
 
 type DeltaTime float32
 
@@ -95,7 +95,7 @@ func registerComponents(world *freecs.World) masks {
 // spawnLevel populates the world with paddle, ball, and a brick grid, and
 // stores their handles on the GameState resource for later reference.
 func spawnLevel(world *freecs.World, m masks) {
-	state := freecs.Resource[GameState](world)
+	state := freecs.MustResource[GameState](world)
 
 	paddle := world.Spawn(m.position | m.size | m.color)
 	freecs.Set(world, paddle, Position{X: paddleStartX, Y: paddleY})
@@ -151,9 +151,9 @@ func resetBallOntoPaddle(world *freecs.World, state *GameState) {
 // --- systems ---
 
 func inputSystem(world *freecs.World) {
-	input := freecs.Resource[Input](world)
-	state := freecs.Resource[GameState](world)
-	delta := float32(*freecs.Resource[DeltaTime](world))
+	input := freecs.MustResource[Input](world)
+	state := freecs.MustResource[GameState](world)
+	delta := float32(*freecs.MustResource[DeltaTime](world))
 
 	paddlePos, _ := freecs.GetMut[Position](world, state.Paddle)
 	if paddlePos == nil {
@@ -186,11 +186,11 @@ func inputSystem(world *freecs.World) {
 }
 
 func ballPhysicsSystem(world *freecs.World) {
-	state := freecs.Resource[GameState](world)
+	state := freecs.MustResource[GameState](world)
 	if !state.Started {
 		return
 	}
-	delta := float32(*freecs.Resource[DeltaTime](world))
+	delta := float32(*freecs.MustResource[DeltaTime](world))
 
 	position, _ := freecs.GetMut[Position](world, state.Ball)
 	velocity, _ := freecs.GetMut[Velocity](world, state.Ball)
@@ -215,7 +215,7 @@ func ballPhysicsSystem(world *freecs.World) {
 }
 
 func paddleBounceSystem(world *freecs.World) {
-	state := freecs.Resource[GameState](world)
+	state := freecs.MustResource[GameState](world)
 	if !state.Started {
 		return
 	}
@@ -252,7 +252,7 @@ func paddleBounceSystem(world *freecs.World) {
 
 func brickCollisionSystem() freecs.SystemFn {
 	return func(world *freecs.World) {
-		state := freecs.Resource[GameState](world)
+		state := freecs.MustResource[GameState](world)
 		if !state.Started {
 			return
 		}
@@ -329,7 +329,7 @@ func brickCollisionSystem() freecs.SystemFn {
 }
 
 func lifeSystem(world *freecs.World) {
-	state := freecs.Resource[GameState](world)
+	state := freecs.MustResource[GameState](world)
 	if !state.Started || state.Lost || state.Won {
 		return
 	}
@@ -349,7 +349,7 @@ func lifeSystem(world *freecs.World) {
 
 func renderSystem(r *renderer) freecs.SystemFn {
 	return func(world *freecs.World) {
-		state := freecs.Resource[GameState](world)
+		state := freecs.MustResource[GameState](world)
 		r.beginFrame()
 
 		freecs.Iter3[Position, Size, Color](world, 0, 0, func(_ freecs.Entity, position *Position, size *Size, color *Color) {
@@ -406,6 +406,6 @@ func restart(world *freecs.World, m masks) {
 		world.QueueDespawn(entity)
 	}
 	world.ApplyCommands()
-	*freecs.Resource[GameState](world) = GameState{Lives: startingLives}
+	*freecs.MustResource[GameState](world) = GameState{Lives: startingLives}
 	spawnLevel(world, m)
 }

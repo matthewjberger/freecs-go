@@ -26,6 +26,20 @@ type World struct {
 	tagSets       map[reflect.Type]map[Entity]struct{}
 	commandBuffer []func(*World)
 	resources     map[reflect.Type]any
+	iterDepth     int
+}
+
+// enterIter / leaveIter bracket the iter-style helpers so the world
+// can detect structural mutations attempted from inside a callback.
+// Spawn / Despawn / Add / Remove panic while iterDepth > 0; defer
+// those via the command buffer (QueueSpawn, QueueDespawn, ...).
+func (w *World) enterIter() { w.iterDepth++ }
+func (w *World) leaveIter() { w.iterDepth-- }
+
+func (w *World) guardStructuralMutation(op string) {
+	if w.iterDepth > 0 {
+		panic("freecs: " + op + " called during Iter/ForEach; defer via the command buffer (Queue* helpers)")
+	}
 }
 
 // New creates an empty world. Components must be registered with
@@ -43,6 +57,11 @@ func newWorldWithAllocator(shared *allocator) *World {
 		eventByType: make(map[reflect.Type]int),
 		tagSets:     make(map[reflect.Type]map[Entity]struct{}),
 		resources:   make(map[reflect.Type]any),
+		// currentTick starts at 1, not 0, so changes stamped before
+		// the first Step (initial spawns, setup-time mutations) are
+		// strictly greater than the zero-valued lastTick watermark
+		// and visible to IterChanged on frame 0.
+		currentTick: 1,
 	}
 }
 

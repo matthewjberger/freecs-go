@@ -78,7 +78,7 @@ func main() {
 
 func physicsSystem(posMask, velMask freecs.Mask) freecs.SystemFn {
 	return func(world *freecs.World) {
-		delta := float32(*freecs.Resource[DeltaTime](world))
+		delta := float32(*freecs.MustResource[DeltaTime](world))
 		freecs.Iter2[Position, Velocity](world, 0, 0, func(_ freecs.Entity, position *Position, velocity *Velocity) {
 			position.X += velocity.X * delta
 			position.Y += velocity.Y * delta

@@ -24,7 +24,7 @@ func TestGCSafeWithPointerComponents(t *testing.T) {
 	entities := make([]Entity, count)
 	for index := 0; index < count; index++ {
 		name := "sprite-" + string(rune('A'+index%26))
-		entity := world.Spawn(MaskOf[Sprite](world) | MaskOf[Transform](world))
+		entity := world.Spawn(MustMaskOf[Sprite](world) | MustMaskOf[Transform](world))
 		Set(world, entity, Sprite{Name: &name})
 		Set(world, entity, Transform{X: float32(index)})
 		entities[index] = entity

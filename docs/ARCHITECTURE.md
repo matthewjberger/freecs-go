@@ -70,7 +70,7 @@ The coordination layer is what systems use to talk to each other across the fram
 
 **Commands** are a slice of closures on the World. The point is iteration safety. `freecs.Iter1[Health]` can call `world.QueueDespawn(entity)` inside the callback without invalidating the iteration; the despawn lands in the buffer and runs when `world.ApplyCommands()` does the drain.
 
-**Resources** are world-scoped values keyed by Go type. `freecs.SetResource(world, DeltaTime(0.016))` stores it; `freecs.Resource[DeltaTime](world)` returns the `*DeltaTime` pointer. Re-setting writes through the existing pointer so cached `*DeltaTime` references stay valid.
+**Resources** are world-scoped values keyed by Go type. `freecs.SetResource(world, DeltaTime(0.016))` stores it; `freecs.Resource[DeltaTime](world)` returns `(*DeltaTime, bool)` and `freecs.MustResource[DeltaTime](world)` panics if the resource is missing. Re-setting writes through the existing pointer so cached `*DeltaTime` references stay valid.
 
 **Schedule** is an ordered list of named systems. It is intentionally small: no read/write sets, no parallel dispatch, no conditional running. The user composes the frame loop themselves.
 

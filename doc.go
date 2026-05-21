@@ -1,3 +1,5 @@
+//go:generate go run ./internal/gen_iter
+
 // Package freecs is an archetype-based Entity Component System for Go.
 //
 // Entities are generational handles. Components are plain Go structs.
