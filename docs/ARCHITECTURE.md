@@ -2,7 +2,7 @@
 
 A frame-rate-bound game runs a handful of systems each frame, each system walks one or more queries, and each query touches every matching entity. The cost of iteration directly determines how many entities the game can afford to have. Everything in freecs-go (lifecycle, structural change, change detection, events, the schedule) is shaped so the inner loop is sequential reads through typed memory with no per-element indirection. The rest of the design is what it has to be to support that.
 
-This document is the map of where the pieces are and how they fit. The deeper writeups for each piece live alongside it in this directory.
+This document is the map of where the pieces are and how they fit. The deeper writeups for each piece live alongside it in this directory. For the full design reference in one place (requirements, invariants, the contract each subsystem holds, alternatives considered, and per-operation complexity), see [DESIGN.md](DESIGN.md).
 
 ## The layered picture
 
@@ -96,6 +96,7 @@ There is no serialization. Components are plain Go structs; serialize them with 
 
 ## Where to read next
 
+- [DESIGN.md](DESIGN.md), the full software design document: goals, requirements, invariants, alternatives, complexity
 - [STORAGE.md](STORAGE.md), how the column memory layout actually works
 - [QUERIES.md](QUERIES.md), the two caches and what gets invalidated when
 - [CHANGE_DETECTION.md](CHANGE_DETECTION.md), the tick watermark
